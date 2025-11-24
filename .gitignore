@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.genkit/
+firebase-debug.log
+gemini-conversation-*.json
+
+# Local Context & Secrets
+GEMINI.md
+.env
+.env.local
+.env.*.local
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
