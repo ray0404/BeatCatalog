@@ -1,76 +1,112 @@
 // src/services/audioAnalyzer.ts
-import EssentiaWASM from 'essentia.js/dist/essentia-wasm.umd.js';
-import Essentia from 'essentia.js/dist/essentia.js-core.es.js';
-import EssentiaExtractor from 'essentia.js/dist/essentia.js-extractor.es.js';
-import essentiaWasmUrl from 'essentia.js/dist/essentia-wasm.web.wasm?url';
+// Imports removed in favor of global scripts
+// import * as EssentiaCore from 'essentia.js/dist/essentia.js-core.es.js';
+// import * as EssentiaExtractorCore from 'essentia.js/dist/essentia.js-extractor.es.js';
 
-let essentia: Essentia | null = null;
+import EssentiaWorker from '../workers/essentia.worker.ts?worker';
+
+// Singleton worker instance
+let worker: Worker | null = null;
+
+// Promise map to handle responses
+let pendingResolve: ((value: any) => void) | null = null;
+let pendingReject: ((reason?: any) => void) | null = null;
 
 /**
  * Initializes the Essentia.js WASM module.
- * This should be called once when the application starts.
- * @returns A promise that resolves when Essentia.js is ready.
+ * No-op in main thread as worker handles it lazily.
+ * Kept for API compatibility.
  */
 export async function initializeEssentia(): Promise<void> {
-  if (!essentia) {
-    try {
-      const wasmModule = await EssentiaWASM({
-        locateFile: (path: string) => {
-          if (path.endsWith('.wasm')) {
-            return essentiaWasmUrl;
-          }
-          return path;
-        }
-      });
-      
-      // Temporary workaround for potential double-module wrapping or incorrect type
-      // Check if EssentiaJS is directly on the module or on a 'default' property
-      const coreModule = wasmModule.EssentiaJS ? wasmModule : (wasmModule.default || wasmModule);
-      
-      if (!coreModule.EssentiaJS) {
-         console.error('EssentiaJS not found on WASM module. Available keys:', Object.keys(wasmModule));
-         // Fallback: Check if it's strictly a raw emscripten module without the class
-         // In some versions/builds, you might need to use a different property
-         throw new Error('EssentiaJS constructor not found in WASM module');
-      }
+    return Promise.resolve();
+}
 
-      console.log('WASM Module loaded successfully');
-      essentia = new Essentia(coreModule);
-      console.log('Essentia.js WASM initialized.');
-    } catch (error) {
-      console.error('Failed to initialize Essentia.js:', error);
-      throw error;
-    }
+function getWorker(): Worker {
+  if (!worker) {
+    worker = new EssentiaWorker();
+    
+    worker.onmessage = (e) => {
+        const { status, result, error } = e.data;
+        
+        if (status === 'success') {
+            if (pendingResolve) {
+                pendingResolve(result);
+                pendingResolve = null;
+                pendingReject = null;
+            }
+        } else {
+            console.error('Worker returned error:', error);
+            if (pendingReject) {
+                pendingReject(new Error(error));
+                pendingResolve = null;
+                pendingReject = null;
+            }
+        }
+    };
+
+    worker.onerror = (e) => {
+        console.error('Worker error:', e);
+        if (pendingReject) {
+            pendingReject(e);
+            pendingResolve = null;
+            pendingReject = null;
+        }
+    };
   }
+  return worker;
 }
 
 /**
- * Analyzes an audio file to extract BPM, Key, and Energy using Essentia.js.
+ * Analyzes an audio file to extract BPM, Key, and Energy using Essentia.js in a Web Worker.
  * @param audioFile The audio File object to analyze.
  * @returns An object containing BPM, Key, and Energy.
  */
 export async function analyzeAudioFile(audioFile: File): Promise<{ bpm: number; key: string; energy: number }> {
-  if (!essentia) {
-    await initializeEssentia(); // Ensure Essentia is initialized
-  }
-
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const arrayBuffer = await audioFile.arrayBuffer();
-  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  
+  try {
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      // Get the raw PCM data from the first channel
+      const channelData = audioBuffer.getChannelData(0);
+      
+      // We cannot transfer the channelData directly as it's a view on the AudioBuffer's internal buffer often.
+      // We should create a copy or check if we can transfer.
+      // Float32Array can be transferred if backed by a unique ArrayBuffer.
+      // safe approach: slice it (creates copy) or send as is (structured clone).
+      // Transferable is better for performance.
+      // const transferBuffer = channelData.buffer; // This might be shared, be careful.
+      // Actually, decodeAudioData returns a new AudioBuffer. 
+      // audioBuffer.getChannelData(0) returns a Float32Array.
+      
+      return new Promise((resolve, reject) => {
+          // If a request is already pending, we might have a race condition if we use a single global handler.
+          // For simplicity in this "one file at a time" loop, we assume sequential access.
+          // For robust parallel processing, we'd need IDs.
+          // But LibraryImporter processes files sequentially in its loop.
+          
+          if (pendingResolve) {
+              reject(new Error('Analysis already in progress'));
+              return;
+          }
 
-  const audioVector = essentia!.arrayToVector(audioBuffer.getChannelData(0)); // Use the first channel
+          pendingResolve = resolve;
+          pendingReject = reject;
+          
+          const w = getWorker();
+          // Send data to worker. We use the buffer from the Float32Array.
+          // We transfer it to avoid copy overhead.
+          w.postMessage({
+              cmd: 'analyze',
+              audioBuffer: channelData, // Structured clone handles TypedArrays efficiently
+              sampleRate: audioBuffer.sampleRate
+          }); // Optional: [channelData.buffer] if we want to transfer ownership
+      });
 
-  // Initialize the Essentia Extractor with default parameters
-  const extractor = new EssentiaExtractor(essentia!);
-  const features = extractor.compute(audioVector);
-
-  // Extract relevant features
-  const bpm = features.rhythm.bpm;
-  const key = features.tonal.key_key + ' ' + features.tonal.key_scale;
-  const energy = features.sfx.loudness; // Using loudness as a proxy for energy
-
-  await audioContext.close();
-
-  return { bpm, key, energy };
+  } finally {
+      await audioContext.close();
+  }
 }
+
 

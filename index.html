@@ -6,6 +6,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="BeatCatalog - Local-first audio library manager" />
     <title>BeatCatalog</title>
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>eruda.init();</script>
+    <script src="/essentia-wasm.web.js"></script>
+    <script src="/essentia.js-core.js"></script>
+    <script src="/essentia.js-extractor.js"></script>
     <script>
       // Global error handler defined immediately to catch module loading errors
       window.addEventListener('error', function(event) {

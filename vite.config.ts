@@ -44,5 +44,19 @@ export default defineConfig({
   },
   build: {
     minify: false
+  },
+  worker: {
+    format: 'es',
+    plugins: () => [
+      wasm(),
+      topLevelAwait()
+    ]
+  },
+  server: {
+    host: '0.0.0.0', // Expose to network
+    port: 5173,
+    hmr: {
+      clientPort: 5173,
+    }
   }
 });

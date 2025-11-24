@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
-declare module 'essentia.js/dist/essentia-wasm.umd.js' {
-  export default function EssentiaWASM(config?: any): Promise<any>;
+declare module 'essentia.js/dist/essentia-wasm.es.js' {
+  export function EssentiaWASM(config?: any): Promise<any>;
 }
 
 declare module 'essentia.js/dist/essentia.js-core.es.js' {
